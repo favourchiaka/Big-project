@@ -1,0 +1,417 @@
+<!doctype html>
+<html lang="en">
+<head>
+	<meta charset="utf-8" />
+	<meta name="viewport" content="width=device-width,initial-scale=1" />
+	<title>Parkour Escape — One Player</title>
+	<style>
+		:root{--bg:#111;--panel:#1b1b1f;--accent:#29a6ff;--muted:#999}
+		body{margin:0;font-family:Segoe UI,Arial;background:linear-gradient(180deg,#0b1020,#071021);color:#eee}
+		header{padding:16px;background:linear-gradient(90deg,rgba(255,255,255,0.02),transparent);display:flex;gap:12px;align-items:center}
+		.logo{font-weight:700;color:var(--accent)}
+		.container{display:flex;gap:12px;padding:12px}
+		.sidebar{width:240px;background:var(--panel);padding:12px;border-radius:8px}
+		.main{flex:1;background:rgba(255,255,255,0.02);padding:12px;border-radius:8px;min-height:600px}
+		button.gameBtn{display:block;width:100%;padding:10px;margin:8px 0;background:#222;border:1px solid #333;color:#fff;border-radius:6px;cursor:pointer}
+		.screen{width:100%;height:560px;background:#000;border-radius:6px;overflow:hidden;position:relative}
+		.loading{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;flex-direction:column;color:#ccc}
+		.credits{position:absolute;bottom:6px;right:8px;font-size:12px;color:var(--muted)}
+		canvas{display:block;background:#111;width:100%;height:100%}
+		.hud{position:absolute;top:8px;left:8px;color:#fff;background:rgba(0,0,0,0.4);padding:6px;border-radius:4px;font-size:13px}
+		.small{font-size:12px;color:var(--muted)}
+	</style>
+</head>
+<body>
+	<header>
+		<div class="logo">Parkour Escape</div>
+		<div class="small">One Player · Jump, Collect, Survive</div>
+	</header>
+	<div class="container">
+		<aside class="sidebar">
+			<div style="margin-top:18px;color:var(--muted);font-size:13px">Controls:</div>
+			<ul style="padding-left:18px;color:var(--muted)">
+				<li>Arrow Keys: Move left/right</li>
+				<li>Up Arrow / W: Jump</li>
+				<li>Collect coins</li>
+				<li>Escape rising lava</li>
+			</ul>
+		</aside>
+		<section class="main">
+			<div class="screen" id="screen">
+				<div class="loading" id="loading">
+					<div id="loadText">Select a game to start</div>
+				</div>
+				<div class="credits" id="credits">Credits: Mini-pack by Author</div>
+			</div>
+		</section>
+	</div>
+
+	<script>
+		const screen = document.getElementById('screen');
+		const loading = document.getElementById('loading');
+		const loadText = document.getElementById('loadText');
+		const credits = document.getElementById('credits');
+
+		let persistentState = {coins: parseInt(localStorage.getItem('coins'))||0, powerups:{jumpBoost:localStorage.getItem('pb')==='1',doubleJump:localStorage.getItem('dj')==='1',elytra:localStorage.getItem('el')==='1',speedBoost:localStorage.getItem('sb')==='1',armor:localStorage.getItem('ar')==='1'}};
+		let gameMode = 'one';
+		let state = {player1:null, player2:null, area:'menu'};
+
+		function saveProgress(){ localStorage.setItem('coins',persistentState.coins); localStorage.setItem('pb',persistentState.powerups.jumpBoost?'1':'0'); localStorage.setItem('dj',persistentState.powerups.doubleJump?'1':'0'); localStorage.setItem('el',persistentState.powerups.elytra?'1':'0'); localStorage.setItem('sb',persistentState.powerups.speedBoost?'1':'0'); localStorage.setItem('ar',persistentState.powerups.armor?'1':'0'); }
+		function showLoading(txt, cb){ loading.style.display='flex'; loadText.textContent=txt; credits.textContent='Loading...'; setTimeout(()=>{ loading.style.display='none'; cb&&cb(); },800); }
+		function clearScreen(){ screen.innerHTML=''; screen.appendChild(loading); screen.appendChild(credits); }
+		function makeButton(txt, on){ const b=document.createElement('button'); b.textContent=txt; b.className='gameBtn'; b.onclick=on; return b; }
+
+		function showMenu(){
+			clearScreen();
+			const box=document.createElement('div');
+			box.style.padding='16px';
+			box.style.color='#fff';
+			box.innerHTML='<h2>Parkour Escape</h2><p>Coins: '+persistentState.coins+'</p><p>Mode: '+(gameMode==='one'?'One Player':'Two Player')+'</p>';
+			box.appendChild(makeButton('One Player', ()=>{ gameMode='one'; showMenu(); }));
+			box.appendChild(makeButton('Two Player', ()=>{ gameMode='two'; showMenu(); }));
+			box.appendChild(makeButton('Start Game', ()=>startRun()));
+			box.appendChild(makeButton('Shop', ()=>openShop()));
+			box.appendChild(makeButton('How to play', ()=>{ alert('One player uses Arrow keys and Space to shoot. Two player adds A/D to move, W to jump, and F to shoot.\n\nEscape rising lava, collect coins, and grab gun pickups for more ammo.'); }));
+			screen.appendChild(box);
+		}
+
+		function startRun(){
+			showLoading('Preparing escape...', ()=>{
+				state.run = {score:0,alive:true,levelCoins:0,bossActive:false,nextBossScore:500};
+				state.player1 = {x:480,y:400,w:20,h:32,vy:0,jumps:0,canDouble:persistentState.powerups.doubleJump,canGlide:persistentState.powerups.elytra,speed:persistentState.powerups.speedBoost?6.2:4.4,jumpPower:persistentState.powerups.jumpBoost?-14:-12, name:'Player1',ammo:30,hp:100,armor:persistentState.powerups.armor};
+				if(gameMode==='two'){
+					state.player2 = {x:420,y:400,w:20,h:32,vy:0,jumps:0,canDouble:persistentState.powerups.doubleJump,canGlide:persistentState.powerups.elytra,speed:persistentState.powerups.speedBoost?6.2:4.4,jumpPower:persistentState.powerups.jumpBoost?-14:-12, name:'Player2',ammo:30,hp:100,armor:persistentState.powerups.armor};
+				}else{
+					state.player2 = null;
+				}
+				enterRun();
+			});
+		}
+
+		function drawHumanoid(ctx,x,y,w,h,color){
+			ctx.save();
+			ctx.fillStyle=color;
+			ctx.fillRect(x+w*0.25,y+h*0.12,w*0.5,h*0.18);
+			ctx.fillRect(x+w*0.3,y+h*0.28,w*0.4,h*0.34);
+			ctx.fillRect(x+w*0.12,y+h*0.36,w*0.2,h*0.24);
+			ctx.fillRect(x+w*0.68,y+h*0.36,w*0.2,h*0.24);
+			ctx.fillRect(x+w*0.16,y+h*0.58,w*0.18,h*0.28);
+			ctx.fillRect(x+w*0.66,y+h*0.58,w*0.18,h*0.28);
+			ctx.fillStyle='#000';
+			ctx.fillRect(x+w*0.32,y+h*0.16,w*0.08,h*0.05);
+			ctx.fillRect(x+w*0.60,y+h*0.16,w*0.08,h*0.05);
+			ctx.fillStyle='#fff';
+			ctx.fillRect(x+w*0.33,y+h*0.17,w*0.03,h*0.02);
+			ctx.fillRect(x+w*0.61,y+h*0.17,w*0.03,h*0.02);
+			ctx.restore();
+		}
+
+		function enterRun(){
+			clearScreen();
+			const container=document.createElement('div');
+			container.style.position='relative';
+			container.style.width='100%';
+			container.style.height='100%';
+			const canv=document.createElement('canvas');
+			canv.width=960;
+			canv.height=560;
+			container.appendChild(canv);
+			const ctx=canv.getContext('2d');
+			const hud=document.createElement('div');
+			hud.className='hud';
+			hud.style.background='rgba(0,0,0,0.6)';
+			hud.style.fontSize='14px';
+			container.appendChild(hud);
+			screen.appendChild(container);
+
+			let platforms=[];
+			let bossBullets=[];
+			let playerBullets=[];
+			let coins=[];
+			let guns=[];
+			let boss=null;
+			let lavaY=canv.height+40;
+			let lavaRise=0.12;
+			let keys={};
+
+			function spawnCoin(x,y){ coins.push({x,y,r:6}); }
+			function spawnGun(x,y){ guns.push({x,y,r:8}); }
+			function spawnArrangedCoins(x,y,w){
+				const count = w >= 600 ? 6 : 3;
+				const startX = x + 24;
+				const gap = (w - 48) / Math.max(count-1,1);
+				for(let i=0;i<count;i++) spawnCoin(startX + gap*i, y-14);
+			}
+			function spawnPlatform(y, x = null, w = null){
+				const width = w ?? (Math.random()<0.18 ? 220 : 120 + Math.random()*60);
+				const maxX = canv.width - width - 20;
+				let px = x;
+				if(px === null){
+					const prev = platforms[platforms.length-1];
+					if(prev){
+						const drift = (Math.random()<0.5 ? -1 : 1) * (45 + Math.random()*50);
+						px = Math.max(20, Math.min(maxX, prev.x + drift));
+					}else{
+						px = (canv.width-width)/2;
+					}
+				}
+				px = Math.max(20, Math.min(maxX, px));
+				platforms.push({x:px,y,w:width,h:20});
+				if(width >= 600){
+					spawnArrangedCoins(px,y,width);
+				}else{
+					const coinCount = Math.random()<0.8 ? 2 : 3;
+					const startX = px + 24;
+					const gap = (width - 48) / Math.max(coinCount-1,1);
+					for(let i=0;i<coinCount;i++) spawnCoin(startX + gap*i, y-14);
+				}
+				if(Math.random()<0.2) spawnGun(px+width/2,y-14);
+			}
+
+			const bigPlatform={x:(canv.width-720)/2,y:canv.height-80,w:720,h:20};
+			platforms.push(bigPlatform);
+			spawnArrangedCoins(bigPlatform.x,bigPlatform.y,bigPlatform.w);
+			if(Math.random()<0.3) spawnGun(bigPlatform.x+bigPlatform.w/2,bigPlatform.y-14);
+			state.player1.x = bigPlatform.x + bigPlatform.w/2 - state.player1.w/2;
+			state.player1.y = bigPlatform.y - state.player1.h;
+			state.player1.vy = 0;
+			state.player1.jumps = 0;
+			if(state.player2){
+				state.player2.x = bigPlatform.x + bigPlatform.w/2 - state.player2.w/2 - 40;
+				state.player2.y = bigPlatform.y - state.player2.h;
+				state.player2.vy = 0;
+				state.player2.jumps = 0;
+			}
+
+			for(let i=0;i<8;i++){
+				spawnPlatform(canv.height-180-i*70+Math.random()*10);
+			}
+
+			window.addEventListener('keydown', kd);
+			window.addEventListener('keyup', ku);
+			function kd(e){
+				keys[e.code]=true;
+				if(e.code==='Space') shootPlayer(state.player1);
+				if(e.code==='KeyF' && state.player2) shootPlayer(state.player2);
+				if((e.code==='ArrowUp' || (gameMode==='one' && e.code==='KeyW')) && state.player1) jumpPlayer(state.player1);
+				if(gameMode==='two' && e.code==='KeyW' && state.player2) jumpPlayer(state.player2);
+			}
+			function ku(e){ keys[e.code]=false; }
+
+			function jumpPlayer(p){
+				if(!state.run.alive||!p) return;
+				if(p.jumps===0){
+					p.vy=p.jumpPower;
+					p.jumps++;
+				}else if(p.jumps===1 && p.canDouble){
+					p.vy=p.jumpPower;
+					p.jumps++;
+				}
+			}
+
+			function shootPlayer(p){
+				if(!state.run.alive||!p) return;
+				if(p.ammo<=0) return;
+				p.ammo--;
+				playerBullets.push({x:p.x+p.w/2,y:p.y+p.h/2,vx:8,owner:p.name});
+			}
+
+			function collectItems(p){
+				for(let i=coins.length-1;i>=0;i--){
+					const c=coins[i];
+					if(Math.hypot((p.x+p.w/2)-c.x,(p.y+p.h/2)-c.y)<18){
+						state.run.levelCoins++;
+						coins.splice(i,1);
+					}
+				}
+				for(let i=guns.length-1;i>=0;i--){
+					const g=guns[i];
+					if(Math.hypot((p.x+p.w/2)-g.x,(p.y+p.h/2)-g.y)<18){
+						p.ammo=Math.min(p.ammo+20,60);
+						guns.splice(i,1);
+					}
+				}
+			}
+
+			function updatePlayer(p,leftKey,rightKey){
+				p.vy+=0.55;
+				if(p.canGlide && p.vy>2) p.vy=2;
+				p.y+=p.vy;
+				if(keys[leftKey]) p.x-=p.speed;
+				if(keys[rightKey]) p.x+=p.speed;
+				p.x=Math.max(0,Math.min(canv.width-p.w,p.x));
+				for(const pl of platforms){
+					if(p.x+p.w>pl.x&&p.x<pl.x+pl.w&&p.y+p.h>pl.y&&p.y+p.h<pl.y+28){
+						p.y=pl.y-p.h;
+						p.vy=0;
+						p.jumps=0;
+						break;
+					}
+				}
+				collectItems(p);
+				if(p.y+p.h>lavaY) state.run.alive=false;
+			}
+
+			function update(){
+				state.run.score += 0.1;
+				if(state.run.score >= state.run.nextBossScore && !state.run.bossActive){
+					state.run.bossActive = true;
+					boss = {x:canv.width/2, y:100, w:80, h:80, hp:8, maxHp:8};
+					platforms = [{x:0, y:canv.height-140, w:canv.width, h:140}];
+				}
+
+				updatePlayer(state.player1,'ArrowLeft','ArrowRight');
+				if(state.player2) updatePlayer(state.player2,'KeyA','KeyD');
+
+				const cameraY = state.player2 ? Math.min(state.player1.y,state.player2.y) : state.player1.y;
+				if(cameraY < 180){
+					const shift=180-cameraY;
+					state.player1.y += shift;
+					if(state.player2) state.player2.y += shift;
+					platforms.forEach(pl=>pl.y += shift);
+					coins.forEach(c=>c.y += shift);
+					guns.forEach(g=>g.y += shift);
+					if(boss) boss.y += shift;
+					lavaY += shift;
+				}
+
+				let nextY = Math.min(...platforms.map(p=>p.y));
+				while(nextY > -120){
+					nextY -= 60 + Math.random()*30;
+					spawnPlatform(nextY);
+				}
+
+				platforms = platforms.filter(pl=>pl.y < canv.height+120);
+				coins = coins.filter(c=>c.y < canv.height+80);
+				guns = guns.filter(g=>g.y < canv.height+80);
+
+				lavaY -= lavaRise;
+				if(boss){
+					boss.x += Math.random()*4-2;
+					if(Math.random()<0.02){ bossBullets.push({x:boss.x,y:boss.y,vx:(state.player1.x-boss.x)/60,vy:(state.player1.y-boss.y)/60}); }
+					for(let i=playerBullets.length-1;i>=0;i--){
+						const b=playerBullets[i];
+						if(Math.hypot(b.x-boss.x,b.y-boss.y)<50){
+							boss.hp--;
+							playerBullets.splice(i,1);
+						}
+					}state.run.nextBossScore += 500; 
+					if(boss.hp<=0){ boss=null; state.run.bossActive=false; }
+				}
+
+				for(let i=bossBullets.length-1;i>=0;i--){
+					const bb=bossBullets[i];
+					bb.x+=bb.vx*2;
+					bb.y+=bb.vy*2;
+					const hitP1 = Math.hypot(bb.x-(state.player1.x+state.player1.w/2),bb.y-(state.player1.y+state.player1.h/2))<20;
+					const hitP2 = state.player2 && Math.hypot(bb.x-(state.player2.x+state.player2.w/2),bb.y-(state.player2.y+state.player2.h/2))<20;
+					if(hitP1){ state.player1.hp-=10; bossBullets.splice(i,1); }
+					else if(hitP2){ state.player2.hp-=10; bossBullets.splice(i,1); }
+					else if(bb.x<0||bb.x>canv.width||bb.y<0||bb.y>canv.height){ bossBullets.splice(i,1); }
+				}
+
+				for(let i=playerBullets.length-1;i>=0;i--){
+					const pb=playerBullets[i];
+					pb.x+=pb.vx;
+					if(pb.x>canv.width) playerBullets.splice(i,1);
+				}
+
+				if(state.player1.hp<=0 || (state.player2 && state.player2.hp<=0)) state.run.alive=false;
+			}
+
+			function draw(){
+				ctx.fillStyle='#0a0f1f';
+				ctx.fillRect(0,0,canv.width,canv.height);
+				ctx.fillStyle='#654';
+				for(const p of platforms) ctx.fillRect(p.x,p.y,p.w,p.h);
+				ctx.fillStyle='#ffd700';
+				for(const c of coins){ ctx.beginPath(); ctx.arc(c.x,c.y,c.r,0,Math.PI*2); ctx.fill(); }
+				ctx.fillStyle='#2af';
+				for(const g of guns){ ctx.beginPath(); ctx.arc(g.x,g.y,g.r,0,Math.PI*2); ctx.fill(); }
+				drawHumanoid(ctx,state.player1.x,state.player1.y,state.player1.w,state.player1.h,'#4af');
+				if(state.player2) drawHumanoid(ctx,state.player2.x,state.player2.y,state.player2.w,state.player2.h,'#fa4');
+				ctx.fillStyle='#ff4444';
+				ctx.fillRect(0,lavaY,canv.width,canv.height-lavaY);
+				if(boss){
+					ctx.fillStyle='#a00';
+					ctx.fillRect(boss.x-boss.w/2,boss.y-boss.h/2,boss.w,boss.h);
+					ctx.fillStyle='#000';
+					ctx.fillRect(boss.x-40,boss.y-boss.h/2-12,80,8);
+					ctx.fillStyle='#0f0';
+					ctx.fillRect(boss.x-40,boss.y-boss.h/2-12,80*(boss.hp/boss.maxHp),8);
+					ctx.fillStyle='#fff';
+					ctx.font='14px Arial';
+					ctx.fillText('Boss',boss.x-18,boss.y-boss.h/2-16);
+				}
+				ctx.fillStyle='#fff';
+				for(const b of playerBullets){ ctx.fillRect(b.x,b.y,6,3); }
+				ctx.fillStyle='#ff0';
+				for(const bb of bossBullets){ ctx.beginPath(); ctx.arc(bb.x,bb.y,6,0,Math.PI*2); ctx.fill(); }
+				let hudText='Mode: '+(state.player2?'Two Player':'One Player')+' | Score: '+Math.floor(state.run.score)+' | Coins: '+state.run.levelCoins+' | Lava: '+Math.floor(canv.height-lavaY);
+				hudText += ' | P1 HP: '+state.player1.hp+' Ammo: '+state.player1.ammo;
+				if(state.player2) hudText += ' | P2 HP: '+state.player2.hp+' Ammo: '+state.player2.ammo;
+				hud.textContent=hudText;
+			}
+
+			function endRun(){
+				window.removeEventListener('keydown',kd);
+				window.removeEventListener('keyup',ku);
+				const overBox=document.createElement('div');
+				overBox.style.padding='16px';
+				overBox.style.color='#fff';
+				overBox.style.background='rgba(0,0,0,0.8)';
+				overBox.style.borderRadius='8px';
+				overBox.style.position='absolute';
+				overBox.style.top='50%';
+				overBox.style.left='50%';
+				overBox.style.transform='translate(-50%,-50%)';
+				overBox.style.textAlign='center';
+				overBox.innerHTML='<h2>GAME OVER</h2><p>Score: '+Math.floor(state.run.score)+'</p><p>Coins Collected: '+state.run.levelCoins+'</p>';
+				if(state.player2){
+					overBox.innerHTML += '<p>Player 1 HP: '+state.player1.hp+' | Player 2 HP: '+state.player2.hp+'</p>';
+				}else{
+					overBox.innerHTML += '<p>Player HP: '+state.player1.hp+'</p>';
+				}
+				overBox.appendChild(makeButton('Return to Menu',()=>{ persistentState.coins+=state.run.levelCoins; saveProgress(); showMenu(); }));
+				screen.appendChild(overBox);
+			}
+
+			function loop(){
+				if(state.run.alive){
+					update();
+					draw();
+					requestAnimationFrame(loop);
+				}else{
+					draw();
+					endRun();
+				}
+			}
+
+			requestAnimationFrame(loop);
+		}
+
+		function openShop(){
+			clearScreen();
+			const s=document.createElement('div');
+			s.style.padding='16px';
+			s.style.color='#fff';
+			s.innerHTML='<h2>Shop — Coins: '+persistentState.coins+'</h2>';
+			const items=[
+				{id:'elytra',name:'Elytra Glide',cost:180,owned:persistentState.powerups.elytra},
+				{id:'speedBoost',name:'Speed Boost',cost:120,owned:persistentState.powerups.speedBoost},
+				{id:'armor',name:'Armor Plating',cost:160,owned:persistentState.powerups.armor},
+				{id:'jumpBoost',name:'Jump Boost +3',cost:100,owned:persistentState.powerups.jumpBoost},
+				{id:'doubleJump',name:'Double Jump',cost:150,owned:persistentState.powerups.doubleJump}
+			];
+			items.forEach(it=>{ const ib=makeButton(it.name+' — '+it.cost+'c'+(it.owned?' ✓':''), ()=>{ if(it.owned) return alert('Already owned'); if(persistentState.coins>=it.cost){ persistentState.coins-=it.cost; persistentState.powerups[it.id]=true; saveProgress(); alert('Purchased '+it.name); openShop(); } else alert('Not enough coins'); }); s.appendChild(ib); });
+			s.appendChild(makeButton('Back', ()=>showMenu()));
+			screen.appendChild(s);
+		}
+
+		loading.style.display='flex';
+		loadText.textContent='Loading game...';
+		setTimeout(()=>{ loading.style.display='none'; showMenu(); },700);
+	</script>
+</body>
+</html>
+www>
